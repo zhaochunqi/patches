@@ -1,0 +1,228 @@
+From 04acd0624c772126ccc20e634899abab033968f9 Mon Sep 17 00:00:00 2001
+From: lanz0519 <1035305632@qq.com>
+Date: Sat, 3 Dec 2022 18:09:28 +0800
+Subject: [PATCH] feat(blog): local api work with multiple vf.files
+
+---
+ runtime/lib/DataAPI/localDataAPI.ts           | 53 ++++++++----
+ .../runtime/lib/DataAPI/localDataAPI.unit.ts  | 81 ++++++++++++++++++-
+ 2 files changed, 116 insertions(+), 18 deletions(-)
+
+diff --git a/runtime/lib/DataAPI/localDataAPI.ts b/runtime/lib/DataAPI/localDataAPI.ts
+index a593751..28be095 100644
+--- a/runtime/lib/DataAPI/localDataAPI.ts
++++ b/runtime/lib/DataAPI/localDataAPI.ts
+@@ -3,6 +3,7 @@ import * as FS from 'fs';
+ import * as Path from 'path';
+ 
+ import { DataAPI } from './types';
++import { extractAPIKeyID } from './utils';
+ 
+ class LocalDataAPI<
+   P extends BaseModels.Program.Model<any, any> = BaseModels.Program.Model<any, any>,
+@@ -10,46 +11,70 @@ class LocalDataAPI<
+   PJ extends BaseModels.Project.Model<any, any> = BaseModels.Project.Model<AnyRecord, AnyRecord>
+ > implements DataAPI<P, V, PJ>
+ {
+-  private version: V;
++  private versions: Array<V>;
+ 
+-  private project: PJ;
++  private projects: Array<PJ>;
+ 
+   private programs: Record<string, P>;
+ 
++  private apiKeyIDs: Record<string, string> = {};
++
+   constructor({ projectSource }: { projectSource: string }, { fs, path }: { fs: typeof FS; path: typeof Path }) {
+     if (!projectSource) throw new Error('project source undefined');
+ 
+-    const content = JSON.parse(fs.readFileSync(path.join('projects', projectSource), 'utf8'));
++    const projectSources = projectSource.split('|||');
++
++    this.versions = [];
++    this.projects = [];
++    this.programs = {};
++
++    projectSources.forEach((projectSourceString: string) => {
++      const projectSource = projectSourceString.split('*KEY*')[0];
++      const content = JSON.parse(fs.readFileSync(path.join('projects', projectSource), 'utf8'));
++
++      if (!this.projects.find((project) => project._id === content.project._id)) {
++        const key = projectSourceString.split('*KEY*')[1];
++        this.apiKeyIDs[key] = content.project._id;
+ 
+-    this.version = content.version;
+-    this.project = content.project;
+-    this.programs = content.programs;
++        this.versions.push(content.version);
++        this.projects.push(content.project);
++        Object.assign(this.programs, content.programs);
++      }
++    });
+   }
+ 
+   public init = async () => {
+     // no-op
+   };
+ 
+-  public getVersion = async () => this.version;
++  public getVersion = async (versionID: string) => {
++    return this.versions.find((version) => version._id === versionID) as V;
++  };
+ 
+   public unhashVersionID = async (versionID: string) => versionID;
+ 
+   public getProgram = async (programID: string) => this.programs[programID];
+ 
+-  public getProject = async () => this.project;
++  public getProject = async (projectID: string) => {
++    return this.projects.find((project) => project._id === projectID) as PJ;
++  };
+ 
+   public fetchDisplayById = async () => null;
+ 
+-  public getProjectNLP = async () => {
++  public getProjectNLP = async (projectID: string) => {
++    const data = this.projects.find((project) => project._id === projectID) as PJ;
+     return {
+-      nlp: this.project.prototype?.nlp,
+-      devVersion: this.project.devVersion,
+-      liveVersion: this.project.liveVersion,
+-      platformData: this.project.platformData,
++      nlp: data.prototype?.nlp,
++      devVersion: data.devVersion,
++      liveVersion: data.liveVersion,
++      platformData: data.platformData,
+     };
+   };
+ 
+-  public getProjectUsingAPIKey = async () => this.project;
++  public getProjectUsingAPIKey = async (key: string) => {
++    const apiKeyID = extractAPIKeyID(key);
++    return this.projects.find((project) => project._id === this.apiKeyIDs[apiKeyID]) as PJ;
++  };
+ }
+ 
+ export default LocalDataAPI;
+diff --git a/tests/runtime/lib/DataAPI/localDataAPI.unit.ts b/tests/runtime/lib/DataAPI/localDataAPI.unit.ts
+index 5bfbf43..cebbcd3 100644
+--- a/tests/runtime/lib/DataAPI/localDataAPI.unit.ts
++++ b/tests/runtime/lib/DataAPI/localDataAPI.unit.ts
+@@ -54,7 +54,7 @@ describe('localDataAPI client unit tests', () => {
+ 
+   it('getVersion', async () => {
+     const content = {
+-      version: 'version-val',
++      version: { _id: '635fed30c361a59742273aeb' },
+       project: 'project-val',
+       programs: 'programs-val',
+     };
+@@ -71,7 +71,7 @@ describe('localDataAPI client unit tests', () => {
+       { fs: stubFS as any, path: path as any }
+     );
+ 
+-    expect(await LocalDataApi.getVersion()).to.eql(content.version);
++    expect(await LocalDataApi.getVersion('635fed30c361a59742273aeb')).to.eql(content.version);
+   });
+ 
+   it('unhashVersionID', async () => {
+@@ -123,7 +123,7 @@ describe('localDataAPI client unit tests', () => {
+   it('getProject', async () => {
+     const content = {
+       version: 'version-val',
+-      project: 'project-val',
++      project: { _id: '635fed30ac000c0006911e17' },
+       programs: 'programs-val',
+     };
+     const stubFS = {
+@@ -139,7 +139,7 @@ describe('localDataAPI client unit tests', () => {
+       { fs: stubFS as any, path: path as any }
+     );
+ 
+-    expect(await LocalDataApi.getProject()).to.eql(content.project);
++    expect(await LocalDataApi.getProject('635fed30ac000c0006911e17')).to.eql(content.project);
+   });
+ 
+   it('fetchDisplayById', async () => {
+@@ -163,4 +163,77 @@ describe('localDataAPI client unit tests', () => {
+ 
+     expect(await LocalDataApi.fetchDisplayById()).to.eql(null);
+   });
++
++  it('getProjectNLP', async () => {
++    const content = {
++      version: 'version-val',
++      project: {
++        _id: '635fed30ac000c0006911e17',
++        prototype: {
++          nlp: {
++            type: 'LUIS',
++            appID: '684303ce-6e54-4965-ae13-ab50ede4f409',
++            resourceID: 'alebdgdn:https://westus.api.cognitive.microsoft.com/',
++          },
++        },
++        devVersion: '635fed30c361a59742273aeb',
++        liveVersion: '6370b765c8ff0d00074de4bc',
++        platformData: {
++          invocationName: 'template project general',
++        },
++      },
++      programs: 'programs-val',
++    };
++    const stubFS = {
++      readFileSync: sinon.stub().returns('readFileSync-val'),
++    };
++    const jsonParseStub = sinon.stub(JSON, 'parse').returns(content as any);
++    const path = {
++      join: sinon.stub().returns('join-val'),
++    };
++
++    const LocalDataApi = new LocalDataAPI(
++      { projectSource: 'projectSource-val' },
++      { fs: stubFS as any, path: path as any }
++    );
++
++    expect(await LocalDataApi.getProjectNLP('635fed30ac000c0006911e17')).to.deep.include({
++      nlp: {
++        type: 'LUIS',
++        appID: '684303ce-6e54-4965-ae13-ab50ede4f409',
++        resourceID: 'alebdgdn:https://westus.api.cognitive.microsoft.com/',
++      },
++      devVersion: '635fed30c361a59742273aeb',
++      liveVersion: '6370b765c8ff0d00074de4bc',
++      platformData: {
++        invocationName: 'template project general',
++      },
++    });
++  });
++
++  it('getProjectUsingAPIKey', async () => {
++    const content = {
++      version: 'version-val',
++      project: { _id: '635fed30ac000c0006911e17' },
++      programs: 'programs-val',
++    };
++    const stubFS = {
++      readFileSync: sinon.stub().returns('readFileSync-val'),
++    };
++    const jsonParseStub = sinon.stub(JSON, 'parse').returns(content as any);
++    const path = {
++      join: sinon.stub().returns('join-val'),
++    };
++
++    const LocalDataApi = new LocalDataAPI(
++      // eslint-disable-next-line no-secrets/no-secrets
++      { projectSource: 'projectSource-val*KEY*635fed4e7a3ae00007cbddad' },
++      { fs: stubFS as any, path: path as any }
++    );
++
++    expect(
++      // eslint-disable-next-line no-secrets/no-secrets
++      await LocalDataApi.getProjectUsingAPIKey('VF.DM.635fed4e7a3ae00007cbddad.27Cl22N4qxipRWm0')
++    ).to.have.property('_id', '635fed30ac000c0006911e17');
++  });
+ });
+-- 
+2.37.1 (Apple Git-137.1)
+
