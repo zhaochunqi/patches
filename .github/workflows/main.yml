@@ -14,7 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v3
         with:
-          path: patch
+          path: patches
       - uses: actions/checkout@v3
         with:
           name: voiceflow/general-runtime
@@ -22,8 +22,8 @@ jobs:
       # Applying patch to this repo.
       - name: Applying patch
         run: |
-          git apply ../0001-feat-blog-local-api-work-with-multiple-vf.files.patch && \
-          git apply ../0002-update-Dockerfile.patch
+          git apply ../patches/0001-feat-blog-local-api-work-with-multiple-vf.files.patch && \
+          git apply ../patches/0002-update-Dockerfile.patch
         working-directory: main
       - name: Log in to the Container registry
         uses: docker/login-action@f054a8b539a109f9f41c372932f1ae047eff08c9
