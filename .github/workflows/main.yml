@@ -17,7 +17,7 @@ jobs:
           path: patches
       - uses: actions/checkout@v3
         with:
-          name: voiceflow/general-runtime
+          repository: voiceflow/general-runtime
           path: main
       # Applying patch to this repo.
       - name: Applying patch
